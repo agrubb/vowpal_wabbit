@@ -32,6 +32,7 @@ license as described in the file LICENSE.
 #include "parse_args.h"
 #include "binary.h"
 #include "autolink.h"
+#include "omp.h"
 
 using namespace std;
 //
@@ -167,6 +168,7 @@ vw* parse_args(int argc, char *argv[])
     ("noop","do no learning")
     ("oaa", po::value<size_t>(), "Use one-against-all multiclass learning with <k> labels")
     ("ect", po::value<size_t>(), "Use error correcting tournament with <k> labels")
+    ("omp", "Run OMP for feature selection")
     ("output_feature_regularizer_binary", po::value< string >(&(all->per_feature_regularizer_output)), "Per feature regularization output file")
     ("output_feature_regularizer_text", po::value< string >(&(all->per_feature_regularizer_text)), "Per feature regularization output file, in text")
     ("port", po::value<size_t>(),"port to listen on")
@@ -325,11 +327,32 @@ vw* parse_args(int argc, char *argv[])
     }
   }
 
+  if (vm.count("omp")) {
+    // Make sure the feature mask is used
+    if (!vm.count("feature_mask")) {
+      if (vm.count("initial_regressor")) {
+        vector<string> init_filename = vm["initial_regressor"].as< vector<string> >();
+        vm.insert(pair<string,po::variable_value>(string("feature_mask"),
+                                                  po::variable_value(init_filename[0], false)));
+      }
+      else {
+        // Need to set feature mask mode, but not load any actual feature mask
+        string fake_filename = "not_a_real_vw_model";
+        vm.insert(pair<string,po::variable_value>(string("feature_mask"),
+                                                  po::variable_value(fake_filename, false)));
+      }
+    }
+  }
+
   all->l = GD::setup(*all, vm);
   all->scorer = all->l;
 
   if (vm.count("bfgs") || vm.count("conjugate_gradient")) 
     all->l = BFGS::setup(*all, to_pass_further, vm, vm_file);
+
+  if (vm.count("omp")) {
+    all->l = OMP::setup(*all, to_pass_further, vm, vm_file);
+  }
 
   if (vm.count("version") || argc == 1) {
     /* upon direct query for version -- spit it out to stdout */
