@@ -317,6 +317,8 @@ vw::vw()
   normalized_idx = 2;
   feature_mask_idx = 3;//by default use the 4th position as mask
 
+  gradient_acc_idx = 1;
+
   add_constant = true;
   audit = false;
   active = false;

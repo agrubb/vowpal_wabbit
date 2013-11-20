@@ -215,6 +215,8 @@ struct vw {
   size_t normalized_idx; //offset idx where the norm is stored (1 or 2 depending on whether adaptive is true)
   size_t feature_mask_idx; //offset idx where mask is stored
 
+  size_t gradient_acc_idx; // offset for gradient accumulation in OMP
+
   size_t lda;
   float lda_alpha;
   float lda_rho;

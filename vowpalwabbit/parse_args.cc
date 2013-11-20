@@ -342,6 +342,14 @@ vw* parse_args(int argc, char *argv[])
                                                   po::variable_value(fake_filename, false)));
       }
     }
+
+    // Set all the stride and indices accordingly
+    // Going to need the adaptive index for accumulating gradients
+    all->reg.stride = 4;
+    all->feature_mask_idx = 3;
+    all->normalized_idx = 2;
+
+    all->gradient_acc_idx = 1;
   }
 
   all->l = GD::setup(*all, vm);
