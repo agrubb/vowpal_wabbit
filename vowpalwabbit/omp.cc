@@ -7,6 +7,7 @@ license as described in the file LICENSE.
 #include <float.h>
 
 #include "omp.h"
+#include "parse_regressor.h"
 #include "vw.h"
 
 using namespace std;
@@ -14,13 +15,34 @@ using namespace std;
 namespace OMP {
 
   struct omp {
-    bool gradient_pass;
+    bool gradient_phase;
     bool initialization_needed;
+    bool example_based_phases;
+    bool save_per_feature;
+
+    size_t last_gradient_pass; // Pass of the last gradient accumulation
+    size_t last_gradient_example; // Example # of the last gradient accumulation
+    size_t last_model_example; // Example # of the last model training
+
+    size_t num_model_passes; // Number of passes to train model for before adding another feature
+    size_t num_model_examples; // Number of examples to train model for before adding another feature
+    size_t num_gradient_examples; // Number of examples to use to estimate gradient
+
+    size_t max_features; // Maximum number of features to select
+    size_t features_selected; // Number of features selected so far
 
     vw* all;
   };
 
-  void start_gradient_pass(omp* o)
+  void checkpoint_predictor(vw& all, string reg_name, size_t feature)
+  {
+    char* filename = new char[reg_name.length()+8];
+    sprintf(filename,"%s.k.%lu",reg_name.c_str(),(long unsigned)feature);
+    dump_regressor(all, string(filename), false);
+    delete[] filename;
+  }
+
+  void start_gradient_phase(omp* o)
   {
     vw* all = o->all;
 
@@ -35,10 +57,15 @@ namespace OMP {
     }
 
     if (!all->quiet) {
-      cerr << " ** starting gradient pass." << endl;
+      cerr << " ** starting gradient phase." << endl;
     }
 
-    o->gradient_pass = true;
+    if (o->save_per_feature) {
+      checkpoint_predictor(*all, all->final_regressor_name, o->features_selected);
+    }
+
+    o->gradient_phase = true;
+    o->last_model_example = all->sd->example_number;
   }
 
   uint32_t select_best_single_weight(vw* all, omp* o, float* max_gain) {
@@ -64,17 +91,16 @@ namespace OMP {
     return max_index;
   }
 
-  void finish_gradient_pass(omp* o)
+  void finish_gradient_phase(omp* o)
   {
     vw* all = o->all;
 
-    uint32_t length = 1 << all->num_bits;
     uint32_t stride = all->reg.stride;
     uint32_t max_index;
     float max_gain;
 
     if (!all->quiet) {
-      cerr << " ** finishing gradient pass: ";
+      cerr << " ** finishing gradient phase: ";
     }
 
     max_index = select_best_single_weight(all, o, &max_gain);
@@ -95,7 +121,11 @@ namespace OMP {
       all->reg.weight_vector[(max_index & all->reg.weight_mask) + all->gradient_acc_idx] = 0.f;
     }
 
-    o->gradient_pass = false;
+    o->gradient_phase = false;
+    o->last_gradient_pass = all->current_pass;
+    o->last_gradient_example = all->sd->example_number;
+
+    o->features_selected++;
   }
 
   float predict(omp* o, example* ec)
@@ -172,11 +202,26 @@ namespace OMP {
     vw* all = o->all;
 
     if (o->initialization_needed) {
-      start_gradient_pass(o);
+      start_gradient_phase(o);
       o->initialization_needed = false;
     }
 
-    if (o->gradient_pass) {
+    if (o->example_based_phases) {
+      if (o->gradient_phase) {
+        size_t gradient_examples = all->sd->example_number - o->last_model_example;
+        if (gradient_examples >= o->num_gradient_examples) {
+          finish_gradient_phase(o);
+        }
+      }
+      else if (o->features_selected < o->max_features) {
+        size_t model_examples = all->sd->example_number - o->last_gradient_example;
+        if (model_examples >= o->num_model_examples) {
+          start_gradient_phase(o);
+        }
+      }
+    }
+
+    if (o->gradient_phase) {
       accumulate_gradient(o, ec);
     }
     else {
@@ -189,8 +234,27 @@ namespace OMP {
     omp* o = (omp*)d;
     vw* all = o->all;
 
-    if (o->gradient_pass) {
-      finish_gradient_pass(o);
+    if (!o->example_based_phases) {
+      // Only ever do a single pass of gradient accumulation
+      if (o->gradient_phase) {
+        finish_gradient_phase(o);
+      }
+      else if (o->features_selected < o->max_features) {
+        size_t model_passes = all->current_pass - o->last_gradient_pass;
+        if (model_passes >= o->num_model_passes) {
+          start_gradient_phase(o);
+        }
+      }
+    }
+  }
+
+  void finish(void* d)
+  {
+    omp* o = (omp*)d;
+    vw* all = o->all;
+
+    if (o->save_per_feature) {
+      checkpoint_predictor(*all, all->final_regressor_name, o->features_selected);
     }
   }
 
@@ -199,7 +263,51 @@ namespace OMP {
     omp* data = (omp*)calloc(1, sizeof(omp));
 
     data->initialization_needed = true;
-    data->gradient_pass = true;
+    data->gradient_phase = true;
+    data->example_based_phases = false;
+    data->save_per_feature = false;
+
+    data->last_gradient_pass = 0;
+    data->last_gradient_example = 0;
+    data->last_model_example = 0;
+
+    data->num_model_passes = (size_t)(-1);
+    data->num_model_examples = (size_t)(-1);
+    data->num_gradient_examples = (size_t)(-1);
+
+    if (vm.count("omp_save_per_feature")) {
+      data->save_per_feature = true;
+    }
+
+    if (vm.count("omp_num_model_examples") && vm.count("omp_num_gradient_examples")) {
+      data->num_model_examples = vm["omp_num_model_examples"].as<size_t>();
+      data->num_gradient_examples = vm["omp_num_gradient_examples"].as<size_t>();
+      data->example_based_phases = true;
+    }
+    else {
+      if (vm.count("omp_num_model_examples")) {
+        cerr << "error: to use --omp_num_model_examples, --omp_num_gradient_examples must be specified as well." << endl;
+        throw exception();
+      }
+
+      if (vm.count("omp_num_gradient_examples")) {
+        cerr << "error: to use --omp_num_gradient_examples, --omp_num_model_examples must be specified as well." << endl;
+        throw exception();
+      }
+
+      if (vm.count("omp_num_model_passes"))
+        data->num_model_passes = vm["omp_num_model_passes"].as<size_t>();
+      else
+        data->num_model_passes = 1;
+    }
+
+    if (vm.count("omp_k")) {
+      data->max_features = vm["omp_k"].as<size_t>();
+    }
+    else {
+      data->max_features = (size_t)(-1);
+    }
+    data->features_selected = 0;
 
     data->all = &all;
 
