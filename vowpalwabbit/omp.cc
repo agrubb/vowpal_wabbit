@@ -19,6 +19,7 @@ namespace OMP {
     bool initialization_needed;
     bool example_based_phases;
     bool save_per_feature;
+    bool multi_loss;
 
     size_t last_gradient_pass; // Pass of the last gradient accumulation
     size_t last_gradient_example; // Example # of the last gradient accumulation
@@ -80,11 +81,39 @@ namespace OMP {
         float gain = fabs(all->reg.weight_vector[i*stride + all->gradient_acc_idx]);
         if (gain > *max_gain) {
           *max_gain = gain;
-          max_index = i*stride;
+          max_index = i;
         }
 
         // Clear out data for training actual model
         all->reg.weight_vector[i*stride + all->gradient_acc_idx] = 0.f;
+      }
+    }
+
+    return max_index;
+  }
+
+  uint32_t select_best_multi_weight(vw* all, omp* o, float* max_gain) {
+    uint32_t length = 1 << all->num_bits;
+    uint32_t stride = all->reg.stride;
+    uint32_t wpp = all->wpp;
+
+    *max_gain = -FLT_MAX;
+    uint32_t max_index = 0;
+
+    for (uint32_t i = 0; i < length; i += wpp) {
+      for (uint32_t j = i; j < i + wpp; j++) {
+        float gain = 0.0;
+        if (all->reg.weight_vector[j*stride + all->feature_mask_idx] != 1.) {
+          gain += fabs(all->reg.weight_vector[j*stride + all->gradient_acc_idx]);
+
+          // Clear out data for training actual model
+          all->reg.weight_vector[j*stride + all->gradient_acc_idx] = 0.f;
+        }
+
+        if (gain > *max_gain) {
+          *max_gain = gain;
+          max_index = i;
+        }
       }
     }
 
@@ -103,7 +132,12 @@ namespace OMP {
       cerr << " ** finishing gradient phase: ";
     }
 
-    max_index = select_best_single_weight(all, o, &max_gain);
+    if (o->multi_loss) {
+      max_index = select_best_multi_weight(all, o, &max_gain);
+    }
+    else {
+      max_index = select_best_single_weight(all, o, &max_gain);
+    }
 
     // Activate the best feature
     if (max_gain < 0) {
@@ -111,14 +145,32 @@ namespace OMP {
         cerr << "no feature selected, best candidate had negative gain." << endl;
       }
     } else {
-      if (!all->quiet) {
-        cerr << "adding feature "
-             << (max_index & all->reg.weight_mask) / (stride)
-             << " to model." << endl;
-      }
+      if (o->multi_loss) {
+        uint32_t wpp = all->wpp;
 
-      all->reg.weight_vector[(max_index & all->reg.weight_mask) + all->feature_mask_idx] = 1.f;
-      all->reg.weight_vector[(max_index & all->reg.weight_mask) + all->gradient_acc_idx] = 0.f;
+        if (!all->quiet) {
+          cerr << "adding feature "
+               << (max_index & all->reg.weight_mask) / wpp
+               << " [" << (max_index & all->reg.weight_mask)
+               << "] to model." << endl;
+        }
+
+        // Turn on everything in the block
+        for (uint32_t j = max_index; j < max_index + wpp; j++) {
+          all->reg.weight_vector[((j*stride) & all->reg.weight_mask) + all->feature_mask_idx] = 1.f;
+          all->reg.weight_vector[((j*stride) & all->reg.weight_mask) + all->gradient_acc_idx] = 0.f;
+        }
+      }
+      else {
+        if (!all->quiet) {
+          cerr << "adding feature "
+               << (max_index & all->reg.weight_mask)
+               << " to model." << endl;
+        }
+
+        all->reg.weight_vector[((max_index*stride) & all->reg.weight_mask) + all->feature_mask_idx] = 1.f;
+        all->reg.weight_vector[((max_index*stride) & all->reg.weight_mask) + all->gradient_acc_idx] = 0.f;
+      }
     }
 
     o->gradient_phase = false;
@@ -266,6 +318,7 @@ namespace OMP {
     data->gradient_phase = true;
     data->example_based_phases = false;
     data->save_per_feature = false;
+    data->multi_loss = false;
 
     data->last_gradient_pass = 0;
     data->last_gradient_example = 0;
@@ -308,6 +361,10 @@ namespace OMP {
       data->max_features = (size_t)(-1);
     }
     data->features_selected = 0;
+
+    if (vm.count("oaa") || vm.count("csoaa")) {
+      data->multi_loss = true;
+    }
 
     data->all = &all;
 
