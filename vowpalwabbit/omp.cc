@@ -20,6 +20,7 @@ namespace OMP {
     bool example_based_phases;
     bool save_per_feature;
     bool multi_loss;
+    bool feature_costs;
 
     size_t last_gradient_pass; // Pass of the last gradient accumulation
     size_t last_gradient_example; // Example # of the last gradient accumulation
@@ -79,6 +80,17 @@ namespace OMP {
     for (uint32_t i = 0; i < length; i++) {
       if (all->reg.weight_vector[i*stride + all->feature_mask_idx] != 1.) {
         float gain = fabs(all->reg.weight_vector[i*stride + all->gradient_acc_idx]);
+        float cost = 1.;
+
+        if (o->feature_costs) {
+          float c = all->reg.weight_vector[i*stride + all->feature_cost_idx];
+
+          if (c > 0.) {
+            cost = c;
+          }
+        }
+
+        gain /= cost;
         if (gain > *max_gain) {
           *max_gain = gain;
           max_index = i;
@@ -103,13 +115,25 @@ namespace OMP {
     for (uint32_t i = 0; i < length; i += wpp) {
       for (uint32_t j = i; j < i + wpp; j++) {
         float gain = 0.0;
+        float cost = 0.0;
+
         if (all->reg.weight_vector[j*stride + all->feature_mask_idx] != 1.) {
           gain += fabs(all->reg.weight_vector[j*stride + all->gradient_acc_idx]);
+
+          if (o->feature_costs) {
+            float c = all->reg.weight_vector[j*stride + all->feature_cost_idx];
+            cost = max(cost, c);
+          }
 
           // Clear out data for training actual model
           all->reg.weight_vector[j*stride + all->gradient_acc_idx] = 0.f;
         }
 
+        if (cost <= 0.) {
+          cost = 1.0;
+        }
+
+        gain /= cost;
         if (gain > *max_gain) {
           *max_gain = gain;
           max_index = i;
@@ -319,6 +343,7 @@ namespace OMP {
     data->example_based_phases = false;
     data->save_per_feature = false;
     data->multi_loss = false;
+    data->feature_costs = false;
 
     data->last_gradient_pass = 0;
     data->last_gradient_example = 0;
@@ -330,6 +355,10 @@ namespace OMP {
 
     if (vm.count("omp_save_per_feature")) {
       data->save_per_feature = true;
+    }
+
+    if (vm.count("feature_costs")) {
+      data->feature_costs = true;
     }
 
     if (vm.count("omp_num_model_examples") && vm.count("omp_num_gradient_examples")) {

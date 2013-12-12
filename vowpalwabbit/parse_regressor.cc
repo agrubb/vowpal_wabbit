@@ -363,4 +363,26 @@ void parse_mask_regressor_args(vw& all, po::variables_map& vm){
   }
 }
 
+void parse_feature_costs(vw& all, po::variables_map& vm)
+{
+  if (vm.count("feature_costs")) {
+    size_t length = ((size_t)1) << all.num_bits;
+    string cost_filename = vm["feature_costs"].as<string>();
 
+    io_buf io_temp_cost;
+    io_temp_cost.open_file(cost_filename.c_str(), false, io_buf::READ);
+    save_load_header(all, io_temp_cost, true, false);
+    all.l->save_load(io_temp_cost, true, false);
+    io_temp_cost.close_file();
+    for (size_t j = 0; j < length; j++){
+      float v = all.reg.weight_vector[j*all.reg.stride];
+      all.reg.weight_vector[j*all.reg.stride + all.feature_cost_idx] = v;
+
+      // Re-zero the weight
+      all.reg.weight_vector[j*all.reg.stride] = 0.;
+    }
+
+    // Clean up the stuff loaded from the header
+    all.options_from_file.assign("");
+  }
+}

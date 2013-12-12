@@ -216,6 +216,7 @@ struct vw {
   size_t feature_mask_idx; //offset idx where mask is stored
 
   size_t gradient_acc_idx; // offset for gradient accumulation in OMP
+  size_t feature_cost_idx; // offset for feature costs in OMP
 
   size_t lda;
   float lda_alpha;

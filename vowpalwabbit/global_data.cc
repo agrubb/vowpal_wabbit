@@ -318,6 +318,7 @@ vw::vw()
   feature_mask_idx = 3;//by default use the 4th position as mask
 
   gradient_acc_idx = 1;
+  feature_cost_idx = 3; // Need to set this to something else if mask is on
 
   add_constant = true;
   audit = false;

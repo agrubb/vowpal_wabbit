@@ -141,6 +141,7 @@ vw* parse_args(int argc, char *argv[])
     ("decay_learning_rate",    po::value<float>(&(all->eta_decay_rate)),
      "Set Decay factor for learning_rate between passes")
     ("input_feature_regularizer", po::value< string >(&(all->per_feature_regularizer_input)), "Per feature regularization input file")
+    ("feature_costs", po::value<string>(), "Model file with feature costs in it (for OMP currently)")
     ("final_regressor,f", po::value< string >(), "Final regressor")
     ("readable_model", po::value< string >(), "Output human-readable final regressor with numeric features")
     ("invert_hash", po::value< string >(), "Output human-readable final regressor with feature names")
@@ -355,6 +356,16 @@ vw* parse_args(int argc, char *argv[])
     all->normalized_idx = 2;
 
     all->gradient_acc_idx = 1;
+    if (vm.count("feature_costs")) {
+      if (all->normalized_updates) {
+        // Big waste of space, but need all the other indices
+        all->reg.stride *= 2;
+        all->feature_cost_idx = 4;
+      }
+      else {
+        all->feature_cost_idx = 2;
+      }
+    }
   }
 
   all->l = GD::setup(*all, vm);
@@ -728,6 +739,11 @@ vw* parse_args(int argc, char *argv[])
 
   if (vm.count("sendto"))
     all->l = SENDER::setup(*all, vm, all->pairs);
+
+  // set the feature costs
+  if (vm.count("feature_costs")) {
+      parse_feature_costs(*all, vm);
+  }
 
   // Need to see if we have to load feature mask first or second.
   // -i and -mask are from same file, load -i file first so mask can use it
