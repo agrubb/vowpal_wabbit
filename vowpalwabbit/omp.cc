@@ -79,7 +79,8 @@ namespace OMP {
 
     for (uint32_t i = 0; i < length; i++) {
       if (all->reg.weight_vector[i*stride + all->feature_mask_idx] != 1.) {
-        float gain = fabs(all->reg.weight_vector[i*stride + all->gradient_acc_idx]);
+        float g = (all->reg.weight_vector[i*stride + all->gradient_acc_idx]);
+        float gain = g*g;
         float cost = 1.;
 
         if (o->feature_costs) {
@@ -118,7 +119,8 @@ namespace OMP {
         float cost = 0.0;
 
         if (all->reg.weight_vector[j*stride + all->feature_mask_idx] != 1.) {
-          gain += fabs(all->reg.weight_vector[j*stride + all->gradient_acc_idx]);
+          float g = (all->reg.weight_vector[j*stride + all->gradient_acc_idx]);
+          gain += g*g;
 
           if (o->feature_costs) {
             float c = all->reg.weight_vector[j*stride + all->feature_cost_idx];
